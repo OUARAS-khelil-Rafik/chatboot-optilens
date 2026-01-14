@@ -1,0 +1,103 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Brand {
+  id       String       @id @default(cuid())
+  name     String       @unique
+  products LensProduct[]
+}
+
+model PhotochromicTech {
+  id                String        @id @default(cuid())
+  name              String        @unique
+  descriptionFr     String
+  descriptionEn     String
+  descriptionAr     String?
+  descriptionDarija String?
+  lenses            LensProduct[]
+}
+
+model Coating {
+  id           String        @id @default(cuid())
+  code         String        @unique
+  labelFr      String
+  labelEn      String
+  labelAr      String?
+  labelDarija  String?
+  lensCoatings LensCoating[]
+}
+
+model LensProduct {
+  id                String            @id @default(cuid())
+  sku               String            @unique
+
+  brandId           String
+  brand             Brand             @relation(fields: [brandId], references: [id])
+  family            String?
+  index             Float
+  material          String?
+  isAspheric        Boolean           @default(false)
+
+  // Prescription ranges (optional, but useful for validation and recommendation).
+  minSph            Float?
+  maxSph            Float?
+  minCyl            Float?
+  maxCyl            Float?
+
+  // Capabilities / options.
+  photochromic      Boolean           @default(false)
+  photochromicTechId String?
+  photochromicTech  PhotochromicTech? @relation(fields: [photochromicTechId], references: [id])
+  blueCut           Boolean           @default(false)
+
+  description       String?
+
+  coatings          LensCoating[]
+  inventory         InventoryItem[]
+
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+
+  @@index([brandId])
+  @@index([index])
+  @@index([photochromic])
+  @@index([blueCut])
+}
+
+model LensCoating {
+  lensId    String
+  coatingId String
+
+  lens      LensProduct @relation(fields: [lensId], references: [id], onDelete: Cascade)
+  coating   Coating     @relation(fields: [coatingId], references: [id], onDelete: Cascade)
+
+  @@id([lensId, coatingId])
+}
+
+model InventoryItem {
+  id        String      @id @default(cuid())
+  lensId    String
+  lens      LensProduct @relation(fields: [lensId], references: [id], onDelete: Cascade)
+
+  // Your business data.
+  supplier  String?
+  priceCents Int
+  currency  String      @default("DZD")
+  quantity  Int         @default(0)
+  isActive  Boolean     @default(true)
+
+  updatedAt DateTime    @updatedAt
+
+  @@index([lensId])
+  @@index([isActive])
+}

@@ -1,0 +1,9 @@
+- [x] Verify that the copilot-instructions.md file in the .github directory is created.
+- [x] Clarify Project Requirements (Next.js + Prisma/SQLite + Ollama local)
+- [x] Scaffold the Project (Next.js App Router, TS, Tailwind)
+- [x] Customize the Project (catalogue verres + RAG + recommandations + multilangue)
+- [x] Install Required Extensions (aucune)
+- [x] Compile the Project (`npm run build` OK)
+- [x] Create and Run Task (scripts npm disponibles; tasks.json non nécessaire)
+- [ ] Launch the Project (à faire: Ollama + `npm run dev`)
+- [x] Ensure Documentation is Complete (README mis à jour)
