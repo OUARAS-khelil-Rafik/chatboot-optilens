@@ -692,7 +692,7 @@ export default function ChatUI(props: { embed?: boolean }) {
         </div>
       )}
       {toast ? (
-        <div className="pointer-events-none fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full bg-black px-3 py-1 text-xs text-white shadow-lg">
+        <div className="pointer-events-none fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full border ol-border ol-surface-strong px-3 py-1 text-xs shadow-lg backdrop-blur">
           <div className="ol-toast flex items-center gap-2">
             <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
             <span>{toast}</span>
@@ -843,7 +843,7 @@ export default function ChatUI(props: { embed?: boolean }) {
           ref={scrollRef}
           className={
             props.embed
-              ? "ol-scrollbar h-130 overflow-auto rounded-2xl border ol-border ol-surface p-4 shadow-sm backdrop-blur"
+              ? "ol-scrollbar h-[32.5rem] overflow-auto rounded-2xl border ol-border ol-surface p-4 shadow-sm backdrop-blur"
               : "ol-scrollbar ol-chat-bg min-h-0 flex-1 overflow-auto rounded-2xl border ol-border shadow-sm"
           }
         >
@@ -883,7 +883,7 @@ export default function ChatUI(props: { embed?: boolean }) {
                     {m.role === "user" && m.id && selectedChatId && editingMessageId === m.id ? (
                       <div className="flex flex-col gap-2">
                     <textarea
-                      className="w-full rounded-md bg-white/10 p-2 text-sm outline-none"
+                      className="ol-soft-bg w-full rounded-md p-2 text-sm outline-none"
                       value={editingText}
                       onChange={(e) => setEditingText(e.target.value)}
                       rows={3}
@@ -892,7 +892,7 @@ export default function ChatUI(props: { embed?: boolean }) {
                     />
                     <div className="flex gap-2">
                       <button
-                        className="rounded-md border border-white/20 px-2 py-1 text-xs"
+                        className="ol-icon-btn rounded-md border ol-border ol-surface-strong px-2 py-1 text-xs"
                         type="button"
                         onClick={() => {
                           setEditingMessageId(null);
@@ -906,7 +906,7 @@ export default function ChatUI(props: { embed?: boolean }) {
                         </span>
                       </button>
                       <button
-                        className="rounded-md bg-white px-2 py-1 text-xs font-medium text-black"
+                        className="ol-icon-btn ol-primary-btn rounded-md px-2 py-1 text-xs font-medium"
                         type="button"
                         onClick={() => void editAndRegenerate({ messageId: m.id!, newText: editingText })}
                         disabled={loading}
@@ -925,7 +925,7 @@ export default function ChatUI(props: { embed?: boolean }) {
                       {m.role === "user" && m.id && selectedChatId ? (
                         <button
                           type="button"
-                          className="ol-chip rounded-md bg-white/10 p-1 hover:bg-white/20"
+                          className="ol-chip ol-icon-btn rounded-md bg-transparent ol-soft-bg p-1"
                           onClick={() => {
                             setEditingMessageId(m.id!);
                             setEditingText(m.content);

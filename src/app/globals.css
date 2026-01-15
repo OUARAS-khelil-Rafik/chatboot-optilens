@@ -224,6 +224,7 @@ body {
     rgb(var(--ol-surface-2) / 0.98) 60%,
     rgb(var(--ol-surface-2) / 0.0)
   );
+  -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
 }
 
@@ -455,7 +456,6 @@ body {
 
 :root[data-theme="dark"] .ol-cursor-glow {
   mix-blend-mode: screen;
-  opacity: 0;
 }
 
 .ol-scrollbar {
