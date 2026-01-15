@@ -25,10 +25,6 @@ function getArgNumber(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-function getArgBoolean(name: string): boolean {
-  return process.argv.includes(`--${name}`);
-}
-
 function ensureDir(p: string) {
   fs.mkdirSync(p, { recursive: true });
 }
@@ -54,7 +50,6 @@ async function main() {
   const maxChats = getArgNumber("maxChats", 500);
   const maxExamples = getArgNumber("maxExamples", 5000);
   const maxMessagesPerExample = getArgNumber("maxMessagesPerExample", 16);
-  const includeOnlyActiveChats = !getArgBoolean("includeDeleted");
 
   const outPath = path.resolve(process.cwd(), outArg);
   ensureDir(path.dirname(outPath));

@@ -2,11 +2,20 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { detectLanguageInfo, type SupportedLanguage } from "@/lib/language";
 import { ollamaChat, ollamaChatStream, type OllamaMessage } from "@/lib/ollama";
+import { openaiCompatChat, openaiCompatChatStream } from "@/lib/openaiCompat";
 import { parsePrescription, recommendFromInputs } from "@/lib/recommendation";
 import { formatCatalogContextForPrompt, searchCatalog } from "@/lib/catalogSearch";
 import { prisma } from "@/lib/db";
 
 export const runtime = "nodejs";
+
+// Chat endpoint responsibilities:
+// - Accept a list of client-side messages (and optional chatId/messageId for regeneration)
+// - Detect language (FR/EN/AR/DZ) and enforce a language rule in the system prompt
+// - Parse prescription and derive a simple lens recommendation
+// - Retrieve compact catalog context from DB (price/stock only if explicitly asked)
+// - Call the LLM (Ollama by default; OpenAI-compatible if configured)
+// - Persist user/assistant messages + maintain a lightweight summary and memory
 
 const MessageSchema = z.object({
   role: z.enum(["user", "assistant", "system"]),
@@ -74,7 +83,7 @@ async function upsertMemory(params: {
 }
 
 async function getMemoryText(params: { chatId: string }): Promise<string> {
-  const items = await prisma.chatMemory.findMany({
+  const items: Array<{ scope: string; key: string; value: string }> = await prisma.chatMemory.findMany({
     where: { scope: { in: ["global", `chat:${params.chatId}`] } },
     orderBy: { updatedAt: "desc" },
     select: { scope: true, key: true, value: true },
@@ -83,7 +92,7 @@ async function getMemoryText(params: { chatId: string }): Promise<string> {
 
   if (items.length === 0) return "(none)";
   return items
-    .map((m) => `- [${m.scope}] ${m.key}: ${m.value}`)
+    .map((m: { scope: string; key: string; value: string }) => `- [${m.scope}] ${m.key}: ${m.value}`)
     .join("\n");
 }
 
@@ -100,6 +109,26 @@ function getCommercialIntent(text: string): { price: boolean; availability: bool
     );
 
   return { price, availability };
+}
+
+function sanitizeAssistantChunk(text: string): string {
+  // Streaming-safe sanitization: remove template artifacts without altering whitespace.
+  return text
+    .replace(/<\|im_start\|>/g, "")
+    .replace(/<\|im_end\|>/g, "")
+    .replace(/<\|assistant\|>/g, "")
+    .replace(/<\|user\|>/g, "")
+    .replace(/<\|system\|>/g, "")
+    .replace(/<\|endoftext\|>/g, "")
+    .replace(/\u0000/g, "")
+    .replace(/\r/g, "");
+}
+
+function sanitizeAssistantText(text: string): string {
+  // Final sanitization for persisted / non-stream answers.
+  return sanitizeAssistantChunk(text)
+    .replace(/\n{4,}/g, "\n\n\n")
+    .trim();
 }
 
 function makeSystemPrompt(lang: SupportedLanguage, ctx: {
@@ -121,10 +150,20 @@ function makeSystemPrompt(lang: SupportedLanguage, ctx: {
           ? "LANGUAGE RULE (highest priority): Answer in English only. Do not answer in French or Arabic."
           : "LANGUAGE RULE (priorité absolue): Réponds en français uniquement. Ne réponds pas en anglais ou en arabe.";
 
+  const noLanguageRefusalRule =
+    lang === "ar"
+      ? "قاعدة مهمة: لا تقل أبدًا أنك لا تستطيع الرد باللغة العربية. أنت مساعد متعدد اللغات وتستطيع الرد بالعربية بشكل طبيعي."
+      : lang === "dz"
+        ? "قاعدة مهمة: ما تقولش بلي ما تقدرش تجاوب بالدارجة/العربية/الفرنسية/الإنجليزية. جاوب عادي وبنفس لغة المستخدم."
+        : lang === "en"
+          ? "Important: Never claim you can't answer in a language. You are multilingual; answer normally in the requested language."
+          : "Important : Ne dis jamais que tu ne peux pas répondre dans une langue. Tu es multilingue ; réponds normalement dans la langue demandée.";
+
   return [
     "You are OptiLens, a multilingual optical-lens sales assistant for an optician.",
     "Your job: help customers choose optical lenses and coatings.",
     "Formatting: Reply in Markdown. Use short headings (#/##), bullet lists (- or +), and **bold** for key recommendations. Use newlines for readability. Do not use HTML.",
+    "Never output internal model tokens such as <|im_start|>, <|im_end|>, <|assistant|>, <|user|>, or similar artifacts.",
     "Important: Do NOT mention prices unless the user explicitly asks for price.",
     "Important: Do NOT mention stock/availability unless the user explicitly asks if it is available / in stock / in store.",
     "When the user asks availability in the store/shop (e.g., 'disponible ?', 'en stock ?', 'في المحل؟', 'متوفر؟'), answer using ONLY the catalog context stock. If stock=0, say it is not available right now.",
@@ -138,6 +177,7 @@ function makeSystemPrompt(lang: SupportedLanguage, ctx: {
     "Support these coatings: AR (antireflet), BLUECUT, PHOTO (photochromique), HARD (durci), HYDRO (hydrophobe).",
     "If user is outside optical lenses domain, politely say you can only help with optical lenses.",
     languageInstruction,
+    noLanguageRefusalRule,
     "",
     "CATALOG_CONTEXT (compact lines):",
     ctx.catalogContext,
@@ -251,6 +291,10 @@ export async function POST(req: Request) {
       chatId = created.id;
     }
 
+    if (!chatId) {
+      throw new Error("chatId is missing after chat session creation");
+    }
+
     const chatScope = `chat:${chatId}`;
 
     // Persist the user's message (unless regenerating an existing stored message).
@@ -265,6 +309,10 @@ export async function POST(req: Request) {
         select: { id: true },
       });
       userMessageId = createdUser.id;
+    }
+
+    if (!userMessageId) {
+      throw new Error("userMessageId is missing after user message persistence");
     }
 
     // Update lightweight memory from deterministic signals.
@@ -287,7 +335,7 @@ export async function POST(req: Request) {
     });
 
     // Load last messages from DB for continuity.
-    const recent = await prisma.chatMessage.findMany({
+    const recent: Array<{ role: string; content: string }> = await prisma.chatMessage.findMany({
       where: { chatId },
       orderBy: { createdAt: "asc" },
       select: { role: true, content: true },
@@ -306,11 +354,15 @@ export async function POST(req: Request) {
     ].join("\n");
 
     const history: OllamaMessage[] = recent
-      .filter((m) => m.role !== "system")
-      .map((m) => ({ role: safeRole(m.role), content: m.content }) satisfies OllamaMessage)
+      .filter((m: { role: string }) => m.role !== "system")
+      .map((m: { role: string; content: string }) => ({ role: safeRole(m.role), content: m.content }) satisfies OllamaMessage)
       .slice(-12);
 
     const llmMessages: OllamaMessage[] = [{ role: "system", content: systemWithMemory }, ...history];
+
+    const llmProvider = (process.env.LLM_PROVIDER ?? "ollama").toLowerCase();
+    const useOpenAICompat = llmProvider === "openai-compat" || llmProvider === "openai_compat";
+    const temperature = 0.2;
 
     if (body.stream) {
       const stream = new ReadableStream<Uint8Array>({
@@ -318,12 +370,19 @@ export async function POST(req: Request) {
           const encoder = new TextEncoder();
           let full = "";
           try {
-            for await (const chunk of ollamaChatStream({ messages: llmMessages, temperature: 0.2 })) {
-              full += chunk;
-              controller.enqueue(encoder.encode(chunk));
+            const gen = useOpenAICompat
+              ? openaiCompatChatStream({ messages: llmMessages, temperature })
+              : ollamaChatStream({ messages: llmMessages, temperature });
+
+            for await (const chunk of gen) {
+              const cleanedChunk = sanitizeAssistantChunk(chunk);
+              if (!cleanedChunk) continue;
+              full += cleanedChunk;
+              controller.enqueue(encoder.encode(cleanedChunk));
             }
 
             // Persist assistant answer after streaming completes.
+            full = sanitizeAssistantText(full);
             await prisma.chatMessage.create({
               data: {
                 chatId,
@@ -346,9 +405,12 @@ export async function POST(req: Request) {
               select: { role: true, content: true },
               take: 20,
             });
-            const summaryPairs = lastForSummary
-              .filter((m) => m.role === "user" || m.role === "assistant")
-              .map((m) => ({ role: safeRole(m.role) as "user" | "assistant", content: m.content }));
+            const summaryPairs: Array<{ role: "user" | "assistant"; content: string }> = lastForSummary
+              .filter((m: { role: string }) => m.role === "user" || m.role === "assistant")
+              .map((m: { role: string; content: string }) => ({
+                role: safeRole(m.role) as "user" | "assistant",
+                content: m.content,
+              }));
 
             const rebuiltSummary = buildSummaryFromMessages(summaryPairs);
 
@@ -372,19 +434,22 @@ export async function POST(req: Request) {
         },
       });
 
-      return new Response(stream, {
-        status: 200,
-        headers: {
-          "Content-Type": "text/plain; charset=utf-8",
-          "Cache-Control": "no-cache, no-transform",
-          "X-Accel-Buffering": "no",
-          "X-Chat-Id": chatId,
-          "X-User-Message-Id": userMessageId,
-        },
+      const headers = new Headers({
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-cache, no-transform",
+        "X-Accel-Buffering": "no",
       });
+      headers.set("X-Chat-Id", chatId);
+      headers.set("X-User-Message-Id", userMessageId);
+
+      return new Response(stream, { status: 200, headers });
     }
 
-    const answer = await ollamaChat({ messages: llmMessages, temperature: 0.2 });
+    const rawAnswer = useOpenAICompat
+      ? await openaiCompatChat({ messages: llmMessages, temperature })
+      : await ollamaChat({ messages: llmMessages, temperature });
+
+    const answer = sanitizeAssistantText(rawAnswer);
 
     await prisma.chatMessage.create({
       data: {
@@ -406,9 +471,12 @@ export async function POST(req: Request) {
       select: { role: true, content: true },
       take: 20,
     });
-    const summaryPairs = lastForSummary
-      .filter((m) => m.role === "user" || m.role === "assistant")
-      .map((m) => ({ role: safeRole(m.role) as "user" | "assistant", content: m.content }));
+    const summaryPairs: Array<{ role: "user" | "assistant"; content: string }> = lastForSummary
+      .filter((m: { role: string }) => m.role === "user" || m.role === "assistant")
+      .map((m: { role: string; content: string }) => ({
+        role: safeRole(m.role) as "user" | "assistant",
+        content: m.content,
+      }));
 
     const rebuiltSummary = buildSummaryFromMessages(summaryPairs);
 

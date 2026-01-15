@@ -10,9 +10,16 @@
     "lint": "eslint",
     "postinstall": "prisma generate",
     "db:migrate": "prisma migrate dev",
-    "db:seed": "prisma db seed",
+    "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "data:finetune": "tsx scripts/exportFinetuneDataset.ts --out training_data/optilens_chat.jsonl"
+    "data:finetune": "tsx scripts/exportFinetuneDataset.ts --out training_data/optilens_chat.jsonl",
+    "data:finetune:prepare": "tsx scripts/prepareFinetuneDataset.ts --in training_data/optilens_chat.jsonl --outDir training_data/prepared --valRatio 0.02",
+    "axolotl:config": "tsx scripts/generateAxolotlConfig.ts",
+    "smoke": "tsx scripts/smokeChat.ts",
+    "smoke:stream": "tsx scripts/smokeChatStream.ts",
+    "smoke:compare": "tsx scripts/smokeCompareModels.ts",
+    "eval:prompts": "tsx scripts/generateEvalPrompts.ts",
+    "eval:language": "tsx scripts/evalLanguageAdherence.ts"
   },
   "dependencies": {
     "@prisma/client": "^6.19.2",
@@ -36,8 +43,5 @@
     "tailwindcss": "^4",
     "tsx": "^4.20.6",
     "typescript": "^5"
-  },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
   }
 }

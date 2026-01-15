@@ -1,7 +1,11 @@
 import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
-import { PrismaClient } from "../src/generated/prisma/client";
+import { PrismaClient } from "@prisma/client";
+
+// Standalone seed script.
+// We normalize SQLite `file:` URLs to absolute paths because the current working directory
+// can differ depending on how the script is invoked (npm, editor, CI).
 
 function findProjectRoot(startDir: string): string {
   let dir = startDir;

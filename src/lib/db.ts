@@ -1,10 +1,14 @@
-import { PrismaClient } from "@/generated/prisma/client";
+import { PrismaClient } from "@prisma/client";
 import fs from "node:fs";
 import path from "node:path";
 
 declare global {
   var prisma: PrismaClient | undefined;
 }
+
+// NOTE: This app uses SQLite by default. SQLite URLs can be relative (e.g. file:prisma/dev.db).
+// During Next/Turbopack runtime, the current working directory can differ from the repo root,
+// which may create or look for the DB in the wrong place. We normalize file: URLs to absolute.
 
 function findProjectRoot(startDir: string): string {
   let dir = startDir;
@@ -36,11 +40,12 @@ function normalizeSqliteUrl(databaseUrl: string): string {
 }
 
 // Ensure DATABASE_URL is always set and that SQLite file paths are absolute.
-// This avoids "Unable to open the database file" when the runtime cwd differs (e.g., Next/Turbopack output dirs).
+// This avoids "Unable to open the database file" when the runtime cwd differs.
 const projectRoot = findProjectRoot(process.cwd());
 const fallbackDbUrl = `file:${path.resolve(projectRoot, "prisma", "dev.db")}`;
 process.env.DATABASE_URL = normalizeSqliteUrl(process.env.DATABASE_URL ?? fallbackDbUrl);
 
+// Global Prisma client caching prevents exhausting DB connections during Next.js hot reload.
 export const prisma = globalThis.prisma ?? new PrismaClient();
 
 if (process.env.NODE_ENV !== "production") {

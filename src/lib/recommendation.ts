@@ -21,6 +21,12 @@ export type Recommendation = {
   rationale: string[];
 };
 
+// Recommendation logic is intentionally simple and explainable:
+// - parse a rough prescription (SPH/CYL/AX)
+// - pick an index based on max optical power (sph and sph+cyl)
+// - add coatings based on needs (screen/outdoor/driving)
+// This is not a medical device; it's a sales-assistant heuristic.
+
 function clampIndex(idx: number): Recommendation["recommendedIndex"] {
   if (idx <= 1.5) return 1.5;
   if (idx <= 1.56) return 1.56;

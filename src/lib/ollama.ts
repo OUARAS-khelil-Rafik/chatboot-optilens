@@ -12,6 +12,10 @@ type OllamaChatStreamChunk = {
   done?: boolean;
 };
 
+// Minimal Ollama client:
+// - `ollamaChatStream` yields raw text chunks as they arrive (newline-delimited JSON)
+// - `ollamaChat` returns the final assistant text for non-stream responses
+
 export async function* ollamaChatStream(params: {
   messages: OllamaMessage[];
   temperature?: number;

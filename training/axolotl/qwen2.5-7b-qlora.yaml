@@ -1,0 +1,52 @@
+# Axolotl QLoRA config (template)
+# Target: local-friendly fine-tuning for Qwen2.5-7B.
+# Base model: Qwen/Qwen2.5-7B-Instruct
+#
+# Notes:
+# - This is a TEMPLATE: adjust batch/seq_len for your GPU.
+# - For 12–24GB GPUs, consider sequence_len=2048 if you hit OOM.
+
+base_model: Qwen/Qwen2.5-7B-Instruct
+model_type: AutoModelForCausalLM
+tokenizer_type: AutoTokenizer
+
+# Dataset exported by this repo
+# `npm run data:finetune` -> training_data/optilens_chat.jsonl
+# (Recommended) `npm run data:finetune:prepare` -> training_data/prepared/{train,val}.jsonl
+datasets:
+  - path: training_data/optilens_chat.jsonl
+    type: chatml
+
+sequence_len: 4096
+sample_packing: true
+pad_to_sequence_len: true
+
+adapter: qlora
+lora_r: 32
+lora_alpha: 64
+lora_dropout: 0.05
+lora_target_linear: true
+
+load_in_4bit: true
+bnb_4bit_quant_type: nf4
+# Most consumer GPUs work best with float16 compute. If your GPU supports bf16 well,
+# you can switch compute dtype + bf16: true.
+bnb_4bit_compute_dtype: float16
+
+micro_batch_size: 2
+gradient_accumulation_steps: 8
+num_epochs: 2
+learning_rate: 2.0e-4
+lr_scheduler: cosine
+warmup_ratio: 0.03
+
+bf16: false
+fp16: true
+# Disable if your environment doesn't have flash-attn installed.
+flash_attention: true
+
+output_dir: training/outputs/qwen2.5-7b-qlora
+save_steps: 200
+eval_steps: 200
+logging_steps: 10
+val_set_size: 0.02

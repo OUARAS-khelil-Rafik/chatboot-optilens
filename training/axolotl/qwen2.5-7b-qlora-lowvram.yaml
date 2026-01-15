@@ -1,0 +1,47 @@
+# Axolotl QLoRA config (template) — low VRAM
+# Target: Qwen2.5-7B QLoRA on small consumer GPUs (e.g. 6GB VRAM).
+#
+# Tradeoffs:
+# - Smaller sequence_len
+# - Smaller LoRA rank
+# - Slower (more gradient accumulation)
+
+base_model: Qwen/Qwen2.5-7B-Instruct
+model_type: AutoModelForCausalLM
+tokenizer_type: AutoTokenizer
+
+datasets:
+  - path: training_data/prepared/train.jsonl
+    type: chatml
+
+sequence_len: 2048
+sample_packing: true
+pad_to_sequence_len: true
+
+adapter: qlora
+lora_r: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_linear: true
+
+load_in_4bit: true
+bnb_4bit_quant_type: nf4
+bnb_4bit_compute_dtype: float16
+
+micro_batch_size: 1
+gradient_accumulation_steps: 16
+num_epochs: 2
+learning_rate: 2.0e-4
+lr_scheduler: cosine
+warmup_ratio: 0.03
+
+bf16: false
+fp16: true
+# Often not available on Windows setups; enable only if installed.
+flash_attention: false
+
+output_dir: training/outputs/qwen2.5-7b-qlora-lowvram
+save_steps: 200
+eval_steps: 200
+logging_steps: 10
+val_set_size: 0.02

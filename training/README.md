@@ -15,6 +15,7 @@ From the repo root:
   - `npx tsx scripts/exportFinetuneDataset.ts --out training_data/optilens_chat.jsonl`
 
 Optional knobs:
+
 - `--maxChats 1000`
 - `--maxExamples 20000`
 - `--maxMessagesPerExample 20`
@@ -23,15 +24,33 @@ The output format is OpenAI-style chat JSONL:
 
 - `{ "messages": [{"role":"system","content":"..."}, {"role":"user","content":"..."}, {"role":"assistant","content":"..."}] }`
 
+## 1b) Prepare dataset (recommended)
+
+- `npm run data:finetune:prepare`
+
+This creates:
+
+- `training_data/prepared/train.jsonl`
+- `training_data/prepared/val.jsonl`
+
+## Qwen2.5-7B (recommended)
+
+If you want to keep inference local (Ollama) and fine-tune a smaller model:
+
+- Base model: `Qwen/Qwen2.5-7B-Instruct`
+- Runbook: [training/runbook-qwen7b-local.md](training/runbook-qwen7b-local.md)
+
 ## 2) Fine-tune (recommended: QLoRA)
 
 Recommended stacks (pick one):
+
 - Unsloth + TRL (fast + simple)
 - Axolotl (config-driven)
 
 Base model suggestion (matches current default): `Qwen/Qwen2.5-7B-Instruct`
 
 Goal suggestions for OptiLens:
+
 - Always answer in the same language as the last user message
 - Consistent Markdown formatting (headings + bullet lists)
 - Optics-domain dialog patterns (ask for SPH/CYL/AXE if missing, etc.)
@@ -41,6 +60,7 @@ Goal suggestions for OptiLens:
 If your goal is "works on all OS", host the model behind an HTTP API on Linux (cloud). Users on Windows/macOS/Linux just use the web app.
 
 Two common serving options:
+
 - vLLM (GPU) -> OpenAI-compatible endpoint
 - llama.cpp / Ollama (GGUF) -> simple local/remote serving
 

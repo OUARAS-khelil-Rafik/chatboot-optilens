@@ -40,11 +40,10 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-/src/generated/prisma
-
 # fine-tuning datasets / outputs
 /training_data/
 /training/outputs/
+/training/axolotl/generated/
 
 # prisma (local dev DBs)
 /prisma/*.db
@@ -70,3 +69,6 @@ yarn-debug.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# training merge temp files
+/training/merge/**/__pycache__/
+/training/merge/**/*.pyc
