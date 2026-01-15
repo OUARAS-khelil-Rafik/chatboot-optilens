@@ -99,7 +99,7 @@ async function getMemoryText(params: { chatId: string }): Promise<string> {
 function getCommercialIntent(text: string): { price: boolean; availability: boolean } {
   // FR/EN/AR signals.
   const price =
-    /(\bprix\b|\btarif\b|\bcombien\b|\bco[uû]t\b|\bprice\b|\bcost\b|\bhow\s*much\b|سعر|ثمن|كم\b|بكم)/i.test(
+    /(\bprix\b|\btarif\b|\bcombien\b|\bco[uû]t\b|\bprice\b|\bcost\b|\bhow\s*much\b|سعر|ثمن|بكم)/i.test(
       text,
     );
 
@@ -109,6 +109,217 @@ function getCommercialIntent(text: string): { price: boolean; availability: bool
     );
 
   return { price, availability };
+}
+
+function isGreetingLike(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  // If the message is very short and mostly a greeting, don't let it flip the chat language.
+  const lowered = t.toLowerCase().replace(/[^a-z\p{Script=Arabic}\s]/gu, " ").replace(/\s+/g, " ").trim();
+  if (lowered.length > 18) return false;
+  return /^(hi|hello|hey|salut|bonjour|bonsoir|salam|salam alaykoum|assalam|assalamu alaykum|السلام عليكم|مرحبا)$/iu.test(
+    lowered,
+  );
+}
+
+function detectExplicitLanguageRequest(text: string): SupportedLanguage | null {
+  const t = text.toLowerCase();
+
+  // Arabic requests (French/English/Arabic phrasing)
+  if (
+    /(\ben\s+arabe\b|\barabe\s+svp\b|\barabic\b|\bin\s+arabic\b|\barabic\s+please\b)/i.test(text) ||
+    /(بالعربية|باللغة\s*العربية|عربي)/i.test(text)
+  ) {
+    return "ar";
+  }
+
+  // French requests
+  if (/(\ben\s+fran[cç]ais\b|\bfran[cç]ais\s+svp\b|\bin\s+french\b|\bfrench\s+please\b)/i.test(text)) {
+    return "fr";
+  }
+
+  // English requests
+  if (/(\ben\s+anglais\b|\benglish\b|\bin\s+english\b|\benglish\s+please\b)/i.test(text)) {
+    return "en";
+  }
+
+  // Darija requests
+  if (/(\bdarija\b|\bdarja\b|\bderja\b|\bبالدارجة\b)/i.test(text)) {
+    return "dz";
+  }
+
+  // Avoid unused var warning in some TS setups.
+  void t;
+  return null;
+}
+
+type AvailabilityQuestionType = "availability" | "quantity";
+
+function getAvailabilityQuestionType(text: string): AvailabilityQuestionType | null {
+  const t = text.trim();
+  if (!t) return null;
+
+  const isQuestionLike = (() => {
+    if (/[?؟]/.test(t)) return true;
+    // Interrogative phrasing in FR/EN/AR (common in chats without a question mark too).
+    if (/(\best-?ce\s+que\b|\bavez-?vous\b|\bvous\s+avez\b|\bdo\s+you\s+have\b|\bis\s+it\b|\bare\s+they\b|\bhow\s+many\b|\bcan\s+you\b|\bهل\b)/i.test(t)) {
+      return true;
+    }
+    // Very short messages like "stock", "en stock", "disponible" are usually questions.
+    const short = t.toLowerCase().replace(/\s+/g, " ").trim();
+    if (short.length <= 20 && /(\bstock\b|\ben\s+stock\b|\bdisponible\b|\bavailability\b|\bavailable\b|متوفر|موجود)/i.test(short)) {
+      return true;
+    }
+    return false;
+  })();
+
+  if (!isQuestionLike) return null;
+
+  // If it's clearly a price question (especially in Arabic), don't treat it as quantity/stock.
+  if (/(سعر|ثمن|بكم)/i.test(t)) return null;
+
+  const quantity =
+    /(\bquantit[eé]\b|\bquantity\b|\bcombien\b.*\b(avez|as|a|ont)\b|\bcombien\s+en\s+stock\b|\bhow\s+many\b|\bqty\b|\bqte\b|\bch7al\b|\bchhal\b|كم\s*(?:عندكم|لديكم)|الكمية|كمية|كم\s*\(?الكمية\)?)/i.test(
+      t,
+    );
+  if (quantity) return "quantity";
+
+  const availability =
+    /(\bavailable\b|\bavailability\b|\bdisponible\b|\bdisponibilit[eé]\b|\ben stock\b|\bstock\b|\bin store\b|\bin\s+shop\b|متوفر|موجود|التوفر|\bالمحل\b|\bفي\s*المحل\b)/i.test(
+      t,
+    );
+  return availability ? "availability" : null;
+}
+
+function formatHitLabel(h: { brand: string; family?: string | null; index: number }): string {
+  return `${h.brand}${h.family ? " " + h.family : ""} ${h.index.toFixed(2)}`;
+}
+
+function buildAvailabilityAnswer(params: {
+  lang: SupportedLanguage;
+  userText: string;
+  hits: Array<{ brand: string; family?: string | null; index: number; sku: string; inventory: { quantity: number } | null }>;
+  type: AvailabilityQuestionType;
+}): string {
+  const { lang, userText, hits, type } = params;
+
+  const wantZeiss = /zeiss/i.test(userText);
+  const preferred = wantZeiss ? hits.filter((h) => h.brand.toLowerCase() === "zeiss") : hits;
+  const list = (preferred.length > 0 ? preferred : hits).slice(0, 3);
+
+  if (hits.length === 0) {
+    if (lang === "ar") {
+      return "حالياً ما لقيتش نفس المنتج في قاعدة البيانات، وما نقدرش نأكد الستوك. إذا تعطيني المرجع/SKU ولا اسم العائلة بالضبط نتحقق لك.";
+    }
+    if (lang === "dz") {
+      return "دروك ما لقيتش نفس المنتوج فالداتا، ما نقدرش نأكد الستوك. عطيني المرجع/SKU ولا الاسم بالضبط ونشوف لك.";
+    }
+    if (lang === "en") {
+      return "I couldn't find that exact product in the database, so I can't confirm the current stock. If you share the SKU/reference, I can check again.";
+    }
+    return "Je ne retrouve pas ce produit précisément dans la base, donc je ne peux pas confirmer le stock actuel. Donne-moi la référence/SKU (ou le nom exact) et je vérifie.";
+  }
+
+  const lines = list.map((h) => {
+    const qty = h.inventory?.quantity;
+    const qtyText = Number.isFinite(qty) ? String(qty) : "N/A";
+    return { label: formatHitLabel(h), sku: h.sku, qty: qty ?? null, qtyText };
+  });
+
+  // If user asks "is it available?" and we have one clear best match, answer directly.
+  const top = lines[0];
+  const topQty = top?.qty;
+
+  if (lang === "ar") {
+    if (type === "quantity") {
+      if (lines.length === 1) {
+        return `حسب قاعدة البيانات: الكمية الحالية لـ ${top.label} (SKU: ${top.sku}) هي ${top.qtyText}.`;
+      }
+      return [
+        "حسب قاعدة البيانات، هاذي الكميات الحالية (أفضل نتائج):",
+        ...lines.map((l) => `- ${l.label} (SKU: ${l.sku}): ${l.qtyText}`),
+      ].join("\n");
+    }
+
+    if (typeof topQty === "number") {
+      return topQty > 0
+        ? `نعم، متوفر حالياً. الستوك لـ ${top.label} (SKU: ${top.sku}) هو ${topQty}.`
+        : `حالياً غير متوفر (الستوك 0) لـ ${top.label} (SKU: ${top.sku}).`;
+    }
+
+    return [
+      "ما عنديش رقم ستوك واضح لهذا المنتج في قاعدة البيانات.",
+      ...lines.map((l) => `- ${l.label} (SKU: ${l.sku}): ${l.qtyText}`),
+    ].join("\n");
+  }
+
+  if (lang === "dz") {
+    if (type === "quantity") {
+      if (lines.length === 1) {
+        return `حسب الداتا: الكمية تاع ${top.label} (SKU: ${top.sku}) هي ${top.qtyText}.`;
+      }
+      return [
+        "حسب الداتا، هذو الكميات (أفضل نتائج):",
+        ...lines.map((l) => `- ${l.label} (SKU: ${l.sku}): ${l.qtyText}`),
+      ].join("\n");
+    }
+
+    if (typeof topQty === "number") {
+      return topQty > 0
+        ? `ايه متوفر دروك. الستوك تاع ${top.label} (SKU: ${top.sku}) هو ${topQty}.`
+        : `دروك راهو ماشي متوفر (ستوك 0) تاع ${top.label} (SKU: ${top.sku}).`;
+    }
+
+    return [
+      "ماكانش رقم ستوك واضح فالداتا لهذا المنتوج.",
+      ...lines.map((l) => `- ${l.label} (SKU: ${l.sku}): ${l.qtyText}`),
+    ].join("\n");
+  }
+
+  if (lang === "en") {
+    if (type === "quantity") {
+      if (lines.length === 1) {
+        return `According to the database: current quantity for ${top.label} (SKU: ${top.sku}) is ${top.qtyText}.`;
+      }
+      return [
+        "According to the database, here are the current quantities (best matches):",
+        ...lines.map((l) => `- ${l.label} (SKU: ${l.sku}): ${l.qtyText}`),
+      ].join("\n");
+    }
+
+    if (typeof topQty === "number") {
+      return topQty > 0
+        ? `Yes, it's currently available. Stock for ${top.label} (SKU: ${top.sku}) is ${topQty}.`
+        : `Not available right now (stock 0) for ${top.label} (SKU: ${top.sku}).`;
+    }
+
+    return [
+      "I don't have a clear stock number for that item in the database.",
+      ...lines.map((l) => `- ${l.label} (SKU: ${l.sku}): ${l.qtyText}`),
+    ].join("\n");
+  }
+
+  // fr
+  if (type === "quantity") {
+    if (lines.length === 1) {
+      return `D’après la base de données : la quantité actuelle pour ${top.label} (SKU : ${top.sku}) est ${top.qtyText}.`;
+    }
+    return [
+      "D’après la base de données, voici les quantités actuelles (meilleurs résultats) :",
+      ...lines.map((l) => `- ${l.label} (SKU : ${l.sku}) : ${l.qtyText}`),
+    ].join("\n");
+  }
+
+  if (typeof topQty === "number") {
+    return topQty > 0
+      ? `Oui, c’est disponible actuellement. Stock pour ${top.label} (SKU : ${top.sku}) : ${topQty}.`
+      : `Pas disponible pour le moment (stock 0) pour ${top.label} (SKU : ${top.sku}).`;
+  }
+
+  return [
+    "Je n’ai pas un chiffre de stock clair dans la base pour cet article.",
+    ...lines.map((l) => `- ${l.label} (SKU : ${l.sku}) : ${l.qtyText}`),
+  ].join("\n");
 }
 
 function sanitizeAssistantChunk(text: string): string {
@@ -124,11 +335,44 @@ function sanitizeAssistantChunk(text: string): string {
     .replace(/\r/g, "");
 }
 
-function sanitizeAssistantText(text: string): string {
-  // Final sanitization for persisted / non-stream answers.
-  return sanitizeAssistantChunk(text)
-    .replace(/\n{4,}/g, "\n\n\n")
-    .trim();
+function filterDisallowedScriptsByLanguage(text: string, lang: SupportedLanguage): string {
+  // Defense-in-depth: models sometimes leak other scripts (Cyrillic/CJK/etc.) despite the prompt.
+  // We keep ASCII/Latin for SKUs, numbers and units.
+  const remove = (re: RegExp) => text.replace(re, "");
+
+  switch (lang) {
+    case "ar":
+      // Arabic + Latin allowed; strip Cyrillic and CJK/Hangul.
+      return remove(/[\p{Script=Cyrillic}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu);
+    case "dz":
+      // Darija may be Arabic script or Latin; same filtering as Arabic.
+      return remove(/[\p{Script=Cyrillic}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu);
+    case "fr":
+    case "en":
+    default:
+      // Latin only; strip Arabic, Cyrillic and CJK/Hangul.
+      return remove(/[\p{Script=Arabic}\p{Script=Cyrillic}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu);
+  }
+}
+
+function normalizeWhitespaceAfterFiltering(text: string): string {
+  return text
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n{4,}/g, "\n\n\n");
+}
+
+function postProcessAssistantText(text: string, lang: SupportedLanguage): string {
+  const cleaned = sanitizeAssistantChunk(text);
+  const filtered = filterDisallowedScriptsByLanguage(cleaned, lang);
+  return normalizeWhitespaceAfterFiltering(filtered).trim();
+}
+
+function postProcessAssistantChunk(text: string, lang: SupportedLanguage): string {
+  // Streaming chunks must preserve leading/trailing whitespace; otherwise words get glued across chunks.
+  const cleaned = sanitizeAssistantChunk(text);
+  const filtered = filterDisallowedScriptsByLanguage(cleaned, lang);
+  return normalizeWhitespaceAfterFiltering(filtered);
 }
 
 function makeSystemPrompt(lang: SupportedLanguage, ctx: {
@@ -163,13 +407,17 @@ function makeSystemPrompt(lang: SupportedLanguage, ctx: {
     "You are OptiLens, a multilingual optical-lens sales assistant for an optician.",
     "Your job: help customers choose optical lenses and coatings.",
     "Formatting: Reply in Markdown. Use short headings (#/##), bullet lists (- or +), and **bold** for key recommendations. Use newlines for readability. Do not use HTML.",
+    "If you use an ordered list, write explicit numbering like 1., 2., 3. (do not repeat 1.).",
     "Never output internal model tokens such as <|im_start|>, <|im_end|>, <|assistant|>, <|user|>, or similar artifacts.",
     "Important: Do NOT mention prices unless the user explicitly asks for price.",
     "Important: Do NOT mention stock/availability unless the user explicitly asks if it is available / in stock / in store.",
+    "If the user explicitly asks for a specific language (e.g., 'en arabe svp', 'in English please'), comply and answer in that language only.",
     "When the user asks availability in the store/shop (e.g., 'disponible ?', 'en stock ?', 'في المحل؟', 'متوفر؟'), answer using ONLY the catalog context stock. If stock=0, say it is not available right now.",
+    "If catalog context contains stock=NUMBER for a product, do NOT say 'unknown' or 'not in the database' for stock; use that NUMBER.",
     "When the user asks price (e.g., 'prix ?', 'combien ?', 'سعر؟'), answer using ONLY the catalog context price.",
     "If the user asks for price/availability and it is not in the catalog context, say you don't have it in the database.",
     "Never invent brands, SKUs, prices, availability, or stock.",
+    "Never claim 'blue light protection' unless the selected product has blueCut=yes OR coatings include BLUECUT in CATALOG_CONTEXT.",
     "Keep conversation context limited: only use the last user message + the provided catalog context + the provided recommendation notes.",
     "When a prescription is present (SPH/CYL), give a recommendation: index (1.5/1.56/1.6/1.67/1.74) + coatings.",
     "Always recommend antireflective (AR) and typically hard coat + hydrophobic unless the user refuses.",
@@ -242,8 +490,10 @@ export async function POST(req: Request) {
       storedLang = (existingSession?.language as SupportedLanguage | null) ?? null;
     }
 
-    const lang: SupportedLanguage =
-      detection.confidence === "low" && storedLang
+    const explicitLang = detectExplicitLanguageRequest(userText);
+    const lang: SupportedLanguage = explicitLang
+      ? explicitLang
+      : storedLang && (detection.confidence === "low" || isGreetingLike(userText))
         ? storedLang
         : detection.lang;
 
@@ -251,9 +501,11 @@ export async function POST(req: Request) {
     const prescription = parsePrescription(userText);
     const recommendation = recommendFromInputs({ prescription, needs: [] });
 
+    const availabilityQuestionType = getAvailabilityQuestionType(userText);
+
     const intent = getCommercialIntent(userText);
-    const includePrice = intent.price;
-    const includeAvailability = intent.availability;
+    const includeAvailability = intent.availability || availabilityQuestionType !== null;
+    const includePrice = intent.price && availabilityQuestionType !== "quantity";
 
     const hits = await searchCatalog({ userText, recommendation, limit: 6 });
 
@@ -313,6 +565,104 @@ export async function POST(req: Request) {
 
     if (!userMessageId) {
       throw new Error("userMessageId is missing after user message persistence");
+    }
+
+    // Deterministic handling for stock/quantity questions to avoid hallucinations.
+    // This answers ONLY from DB hits and respects the detected/stored language.
+    if (availabilityQuestionType) {
+      const deterministic = buildAvailabilityAnswer({
+        lang,
+        userText,
+        hits: hits.map((h) => ({
+          brand: h.brand,
+          family: h.family,
+          index: h.index,
+          sku: h.sku,
+          inventory: h.inventory ? { quantity: h.inventory.quantity } : null,
+        })),
+        type: availabilityQuestionType,
+      });
+
+      const answer = postProcessAssistantText(deterministic, lang);
+
+      if (body.stream) {
+        const stream = new ReadableStream<Uint8Array>({
+          async start(controller) {
+            const encoder = new TextEncoder();
+            controller.enqueue(encoder.encode(answer));
+            controller.close();
+
+            await prisma.chatMessage.create({
+              data: {
+                chatId,
+                role: "assistant",
+                content: answer,
+              },
+              select: { id: true },
+            });
+
+            const lastForSummary = await prisma.chatMessage.findMany({
+              where: { chatId },
+              orderBy: { createdAt: "asc" },
+              select: { role: true, content: true },
+              take: 20,
+            });
+            const summaryPairs: Array<{ role: "user" | "assistant"; content: string }> = lastForSummary
+              .filter((m: { role: string; content: string }) => m.role === "user" || m.role === "assistant")
+              .map((m: { role: string; content: string }) => ({
+                role: safeRole(m.role) as "user" | "assistant",
+                content: m.content,
+              }));
+
+            const rebuiltSummary = buildSummaryFromMessages(summaryPairs);
+            await prisma.chatSession.update({
+              where: { id: chatId },
+              data: { language: lang, summary: rebuiltSummary || null },
+              select: { id: true },
+            });
+          },
+        });
+
+        const headers = new Headers({
+          "Content-Type": "text/plain; charset=utf-8",
+          "Cache-Control": "no-cache, no-transform",
+          "X-Accel-Buffering": "no",
+        });
+        headers.set("X-Chat-Id", chatId);
+        headers.set("X-User-Message-Id", userMessageId);
+        return new Response(stream, { status: 200, headers });
+      }
+
+      await prisma.chatMessage.create({
+        data: {
+          chatId,
+          role: "assistant",
+          content: answer,
+        },
+        select: { id: true },
+      });
+
+      const lastForSummary = await prisma.chatMessage.findMany({
+        where: { chatId },
+        orderBy: { createdAt: "asc" },
+        select: { role: true, content: true },
+        take: 20,
+      });
+      const summaryPairs: Array<{ role: "user" | "assistant"; content: string }> = lastForSummary
+        .filter((m: { role: string; content: string }) => m.role === "user" || m.role === "assistant")
+        .map((m: { role: string; content: string }) => ({
+          role: safeRole(m.role) as "user" | "assistant",
+          content: m.content,
+        }));
+
+      const rebuiltSummary = buildSummaryFromMessages(summaryPairs);
+      await prisma.chatSession.update({
+        where: { id: chatId },
+        data: { language: lang, summary: rebuiltSummary || null },
+        select: { id: true },
+      });
+
+      return NextResponse.json({ chatId, userMessageId, language: lang, answer, catalogHits: hits, recommendation });
     }
 
     // Update lightweight memory from deterministic signals.
@@ -375,14 +725,14 @@ export async function POST(req: Request) {
               : ollamaChatStream({ messages: llmMessages, temperature });
 
             for await (const chunk of gen) {
-              const cleanedChunk = sanitizeAssistantChunk(chunk);
+              const cleanedChunk = postProcessAssistantChunk(chunk, lang);
               if (!cleanedChunk) continue;
               full += cleanedChunk;
               controller.enqueue(encoder.encode(cleanedChunk));
             }
 
             // Persist assistant answer after streaming completes.
-            full = sanitizeAssistantText(full);
+            full = postProcessAssistantText(full, lang);
             await prisma.chatMessage.create({
               data: {
                 chatId,
@@ -449,7 +799,7 @@ export async function POST(req: Request) {
       ? await openaiCompatChat({ messages: llmMessages, temperature })
       : await ollamaChat({ messages: llmMessages, temperature });
 
-    const answer = sanitizeAssistantText(rawAnswer);
+    const answer = postProcessAssistantText(rawAnswer, lang);
 
     await prisma.chatMessage.create({
       data: {

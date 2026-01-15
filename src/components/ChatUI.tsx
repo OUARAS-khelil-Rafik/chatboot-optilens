@@ -4,6 +4,22 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeSanitize from "rehype-sanitize";
+import {
+  Bot,
+  Copy,
+  LoaderCircle,
+  MessageCircle,
+  Moon,
+  Pencil,
+  Plus,
+  RefreshCcw,
+  Send,
+  Sparkles,
+  Sun,
+  Trash2,
+  User,
+  X,
+} from "lucide-react";
 
 type Role = "user" | "assistant";
 
@@ -21,57 +37,16 @@ type ChatSummary = {
   language?: string | null;
 };
 
-function PencilIcon(props: { className?: string }) {
+function TypingIndicator() {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={props.className ?? "h-4 w-4"}
-      aria-hidden="true"
-    >
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
-    </svg>
-  );
-}
-
-function CopyIcon(props: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={props.className ?? "h-4 w-4"}
-      aria-hidden="true"
-    >
-      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-    </svg>
-  );
-}
-
-function RefreshIcon(props: { className?: string }) {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      className={props.className ?? "h-4 w-4"}
-      aria-hidden="true"
-    >
-      <path d="M21 12a9 9 0 1 1-2.64-6.36" />
-      <path d="M21 3v6h-6" />
-    </svg>
+    <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1">
+        <span className="ol-typing-dot" style={{ animationDelay: "0ms" }} />
+        <span className="ol-typing-dot" style={{ animationDelay: "120ms" }} />
+        <span className="ol-typing-dot" style={{ animationDelay: "240ms" }} />
+      </div>
+      <div className="ol-text-muted text-sm">Réponse en cours…</div>
+    </div>
   );
 }
 
@@ -96,10 +71,26 @@ function MessageMarkdown(props: { content: string }) {
           h2: ({ children }) => <h2 className="mt-1 text-sm font-semibold">{children}</h2>,
           h3: ({ children }) => <h3 className="mt-1 text-sm font-medium">{children}</h3>,
           ul: ({ children }) => (
-            <ul className="mt-1 list-disc pl-5 text-sm leading-6 space-y-1">{children}</ul>
+            <ul
+              className={
+                rtl
+                  ? "mt-1 list-disc list-inside pr-5 pl-0 text-sm leading-6 space-y-1"
+                  : "mt-1 list-disc pl-5 text-sm leading-6 space-y-1"
+              }
+            >
+              {children}
+            </ul>
           ),
           ol: ({ children }) => (
-            <ol className="mt-1 list-decimal pl-5 text-sm leading-6 space-y-1">{children}</ol>
+            <ol
+              className={
+                rtl
+                  ? "mt-1 list-decimal list-inside pr-5 pl-0 text-sm leading-6 space-y-1"
+                  : "mt-1 list-decimal pl-5 text-sm leading-6 space-y-1"
+              }
+            >
+              {children}
+            </ol>
           ),
           a: ({ children, href }) => (
             <a
@@ -112,10 +103,10 @@ function MessageMarkdown(props: { content: string }) {
             </a>
           ),
           code: ({ children }) => (
-            <code className="rounded bg-black/5 px-1 py-0.5 font-mono text-[12px]">{children}</code>
+            <code className="ol-code-bg rounded px-1 py-0.5 font-mono text-[12px]">{children}</code>
           ),
           pre: ({ children }) => (
-            <pre className="mt-2 overflow-auto rounded bg-black/5 p-3 text-[12px] leading-5">{children}</pre>
+            <pre className="ol-code-bg mt-2 overflow-auto rounded p-3 text-[12px] leading-5">{children}</pre>
           ),
         }}
       >
@@ -135,6 +126,13 @@ export default function ChatUI(props: { embed?: boolean }) {
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  const [theme, setTheme] = useState<"light" | "dark" | null>(null);
+
+  const cursorGlowRef = useRef<HTMLDivElement | null>(null);
+  const cursorRafRef = useRef<number | null>(null);
+  const cursorTargetRef = useRef<{ x: number; y: number }>({ x: -9999, y: -9999 });
+  const cursorVisibleRef = useRef(false);
 
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
@@ -280,6 +278,67 @@ export default function ChatUI(props: { embed?: boolean }) {
     void refreshChats();
     setMessages(ensureGreetingIfEmpty([]));
   }, []);
+
+  useEffect(() => {
+    // Theme init: localStorage override, else system.
+    const saved = window.localStorage.getItem("ol-theme");
+    const fromStorage = saved === "light" || saved === "dark" ? saved : null;
+    const systemPrefersDark = window.matchMedia?.("(prefers-color-scheme: dark)")?.matches ?? false;
+    const initial: "light" | "dark" = fromStorage ?? (systemPrefersDark ? "dark" : "light");
+    document.documentElement.dataset.theme = initial;
+    setTheme(initial);
+  }, []);
+
+  useEffect(() => {
+    if (!theme) return;
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem("ol-theme", theme);
+  }, [theme]);
+
+  useEffect(() => {
+    if (props.embed) return;
+    const prefersReduced = window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches;
+    if (prefersReduced) return;
+
+    const show = () => {
+      cursorVisibleRef.current = true;
+      if (cursorGlowRef.current) cursorGlowRef.current.style.opacity = "1";
+    };
+
+    const hide = () => {
+      cursorVisibleRef.current = false;
+      if (cursorGlowRef.current) cursorGlowRef.current.style.opacity = "0";
+    };
+
+    const onMove = (e: PointerEvent) => {
+      cursorTargetRef.current = { x: e.clientX, y: e.clientY };
+      if (!cursorVisibleRef.current) show();
+    };
+
+    window.addEventListener("pointermove", onMove, { passive: true });
+    window.addEventListener("blur", hide);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState !== "visible") hide();
+    });
+
+    const tick = () => {
+      const glow = cursorGlowRef.current;
+      if (!glow) return;
+
+      const { x, y } = cursorTargetRef.current;
+      // Center the glow on the cursor.
+      glow.style.transform = `translate3d(${x - 120}px, ${y - 120}px, 0)`;
+      cursorRafRef.current = window.requestAnimationFrame(tick);
+    };
+
+    cursorRafRef.current = window.requestAnimationFrame(tick);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("blur", hide);
+      if (cursorRafRef.current) window.cancelAnimationFrame(cursorRafRef.current);
+      cursorRafRef.current = null;
+    };
+  }, [props.embed]);
 
   async function send() {
     const text = input.trim();
@@ -626,29 +685,49 @@ export default function ChatUI(props: { embed?: boolean }) {
   }
 
   return (
-    <div className={props.embed ? "w-full" : "mx-auto w-full max-w-5xl"}>
+    <div className={props.embed ? "w-full" : "w-full"}>
+      {props.embed ? null : (
+        <div className="ol-cursor-layer">
+          <div ref={cursorGlowRef} className="ol-cursor-glow" />
+        </div>
+      )}
       {toast ? (
-        <div className="pointer-events-none fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full bg-black px-3 py-1 text-xs text-white">
-          {toast}
+        <div className="pointer-events-none fixed left-1/2 top-4 z-50 -translate-x-1/2 rounded-full bg-black px-3 py-1 text-xs text-white shadow-lg">
+          <div className="ol-toast flex items-center gap-2">
+            <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+            <span>{toast}</span>
+          </div>
         </div>
       ) : null}
-      <div className={props.embed ? "flex flex-col gap-3" : "grid grid-cols-1 gap-3 md:grid-cols-[280px_1fr]"}>
+      <div
+        className={
+          props.embed
+            ? "flex flex-col gap-3"
+            : "grid h-[calc(100vh-3rem)] min-h-0 grid-cols-1 gap-3 md:grid-cols-[280px_1fr]"
+        }
+      >
         {props.embed ? null : (
-          <div className="rounded-xl border border-black/10 bg-white p-3">
+          <div className="ol-card ol-surface flex min-h-0 flex-col rounded-2xl border ol-border p-3 shadow-sm backdrop-blur">
             <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold">Chats</div>
+              <div className="flex items-center gap-2 text-sm font-semibold">
+                <MessageCircle className="h-4 w-4" aria-hidden="true" />
+                <span>Chats</span>
+              </div>
               <button
-                className="rounded-lg bg-black px-3 py-1.5 text-xs font-medium text-white"
+                className="ol-chip ol-btn-glow ol-primary-btn inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium shadow-sm disabled:opacity-60"
                 onClick={() => void newChat()}
                 disabled={loading}
               >
-                + Nouveau
+                <Plus className="h-4 w-4" aria-hidden="true" />
+                Nouveau
               </button>
             </div>
 
-            <div className="mt-3 flex flex-col gap-2">
+            <div className="ol-scrollbar mt-3 flex min-h-0 flex-1 flex-col gap-2 overflow-auto pr-1">
               {chats.length === 0 ? (
-                <div className="text-xs text-black/60">Aucun historique pour l’instant.</div>
+                <div className="ol-shimmer rounded-xl border ol-border ol-soft-bg p-3 text-xs ol-text-muted">
+                  Aucun historique pour l’instant.
+                </div>
               ) : null}
 
               {chats.map((c) => (
@@ -656,21 +735,21 @@ export default function ChatUI(props: { embed?: boolean }) {
                   key={c.id}
                   className={
                     selectedChatId === c.id
-                      ? "rounded-lg border border-black/20 bg-black/5 p-2"
-                      : "rounded-lg border border-black/10 bg-white p-2"
+                      ? "ol-chat-item rounded-xl border ol-border-strong ol-soft-bg p-2 shadow-sm"
+                      : "ol-chat-item rounded-xl border ol-border ol-surface-strong p-2"
                   }
                 >
                   {renamingChatId === c.id ? (
                     <div className="flex gap-2">
                       <input
-                        className="w-full rounded-md border border-black/10 px-2 py-1 text-xs"
+                        className="w-full rounded-md border ol-border ol-surface-strong px-2 py-1 text-xs"
                         value={renameTitle}
                         onChange={(e) => setRenameTitle(e.target.value)}
                         placeholder="Nouveau titre"
                         title="Renommer le chat"
                       />
                       <button
-                        className="rounded-md bg-black px-2 py-1 text-xs text-white"
+                        className="ol-primary-btn rounded-md px-2 py-1 text-xs"
                         onClick={() => void renameChat(c.id, renameTitle.trim() || c.title)}
                       >
                         OK
@@ -684,7 +763,7 @@ export default function ChatUI(props: { embed?: boolean }) {
                       title={c.title}
                     >
                       <div className="truncate text-sm font-medium">{c.title}</div>
-                      <div className="mt-0.5 text-[11px] text-black/50">
+                      <div className="ol-text-faint mt-0.5 text-[11px]">
                         {c.language ? c.language.toUpperCase() : "—"} • {new Date(c.updatedAt).toLocaleString()}
                       </div>
                     </button>
@@ -692,21 +771,23 @@ export default function ChatUI(props: { embed?: boolean }) {
 
                   <div className="mt-2 flex gap-2">
                     <button
-                      className="rounded-md border border-black/10 px-2 py-1 text-[11px]"
+                        className="ol-chip inline-flex items-center gap-1.5 rounded-md border ol-border ol-surface-strong px-2 py-1 text-[11px] shadow-sm"
                       onClick={() => {
                         setRenamingChatId(c.id);
                         setRenameTitle(c.title);
                       }}
                       disabled={loading}
                     >
-                      Renommer
+                        <Pencil className="h-3.5 w-3.5" aria-hidden="true" />
+                        Renommer
                     </button>
                     <button
-                      className="rounded-md border border-black/10 px-2 py-1 text-[11px]"
+                        className="ol-chip inline-flex items-center gap-1.5 rounded-md border ol-border ol-surface-strong px-2 py-1 text-[11px] shadow-sm"
                       onClick={() => void deleteChat(c.id)}
                       disabled={loading}
                     >
-                      Supprimer
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        Supprimer
                     </button>
                   </div>
                 </div>
@@ -715,34 +796,92 @@ export default function ChatUI(props: { embed?: boolean }) {
           </div>
         )}
 
-        <div className="flex flex-col gap-3">
-          <div className="rounded-xl border border-black/10 bg-white p-4">
-          <div className="text-lg font-semibold">OptiLens Chat</div>
-          <div className="text-sm text-black/60">
-            Multilingue (FR/EN/AR/DZ) • Catalogue + prix depuis la base • Contexte limité
-          </div>
-          </div>
+        <div className="flex min-h-0 flex-col gap-3">
+          <div className="ol-card rounded-2xl border ol-border ol-surface p-4 shadow-sm backdrop-blur">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <div className="ol-accent-gradient grid h-9 w-9 place-items-center rounded-xl text-white shadow-sm">
+                    <Bot className="h-5 w-5" aria-hidden="true" />
+                  </div>
+                  <div>
+                    <div className="text-lg font-semibold">OptiLens</div>
+                    <div className="ol-text-muted text-sm">
+                      Multilingue (FR/EN/AR/DZ) • Catalogue DB • Réponses compactes
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {props.embed ? null : (
+                  <button
+                    type="button"
+                    className="ol-chip ol-icon-btn inline-flex items-center gap-2 rounded-full border ol-border ol-surface-strong px-3 py-1.5 text-xs shadow-sm"
+                    onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+                    aria-label="Basculer thème clair/sombre"
+                    title="Basculer thème clair/sombre"
+                  >
+                    {theme === "dark" ? (
+                      <Sun className="ol-theme-icon ol-theme-icon--dark h-4 w-4" aria-hidden="true" />
+                    ) : (
+                      <Moon className="ol-theme-icon ol-theme-icon--light h-4 w-4" aria-hidden="true" />
+                    )}
+                    <span>{theme === "dark" ? "Sombre" : "Clair"}</span>
+                  </button>
+                )}
 
+                {loading ? (
+                  <div className="inline-flex items-center gap-2 rounded-full border ol-border ol-surface-strong px-3 py-1.5 text-xs ol-text-muted shadow-sm">
+                    <LoaderCircle className="h-4 w-4 animate-spin" aria-hidden="true" />
+                    <span>En cours</span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
         <div
           ref={scrollRef}
           className={
             props.embed
-              ? "h-130 overflow-auto rounded-xl border border-black/10 bg-white p-4"
-              : "h-[60vh] overflow-auto rounded-xl border border-black/10 bg-white p-4"
+              ? "ol-scrollbar h-130 overflow-auto rounded-2xl border ol-border ol-surface p-4 shadow-sm backdrop-blur"
+              : "ol-scrollbar ol-chat-bg min-h-0 flex-1 overflow-auto rounded-2xl border ol-border shadow-sm"
           }
         >
-          <div className="flex flex-col gap-3">
+          <div className={props.embed ? "flex flex-col gap-3" : "flex flex-col"}>
             {messages.map((m, idx) => (
               <div
                 key={m.id ?? idx}
                 className={
                   m.role === "user"
-                    ? "self-end max-w-[85%] rounded-2xl bg-black text-white px-4 py-2"
-                    : "self-start max-w-[85%] rounded-2xl bg-black/5 text-black px-4 py-2"
+                    ? "ol-message ol-msg-row ol-msg-row--user"
+                    : "ol-message ol-msg-row ol-msg-row--assistant"
                 }
+                style={{ animationDelay: `${Math.min(idx * 35, 210)}ms` }}
               >
-                {m.role === "user" && m.id && selectedChatId && editingMessageId === m.id ? (
-                  <div className="flex flex-col gap-2">
+                <div className={props.embed ? "flex items-start gap-2" : "ol-chat-column"}>
+                  <div className={m.role === "user" ? "ol-msg-inner justify-end" : "ol-msg-inner"}>
+                    {m.role === "assistant" ? (
+                      <div className="ol-avatar ol-avatar--assistant mt-0.5">
+                        <Bot className="h-4 w-4" aria-hidden="true" />
+                      </div>
+                    ) : null}
+
+                    <div
+                      className={
+                        m.role === "user"
+                          ? "ol-msg-content flex justify-end"
+                          : "ol-msg-content"
+                      }
+                    >
+                      <div
+                        className={
+                          m.role === "user"
+                            ? "ol-bubble-user max-w-[720px] rounded-2xl px-4 py-2 shadow-sm"
+                            : "ol-bubble-assistant max-w-[720px] px-0 py-0"
+                        }
+                      >
+                    {m.role === "user" && m.id && selectedChatId && editingMessageId === m.id ? (
+                      <div className="flex flex-col gap-2">
                     <textarea
                       className="w-full rounded-md bg-white/10 p-2 text-sm outline-none"
                       value={editingText}
@@ -761,7 +900,10 @@ export default function ChatUI(props: { embed?: boolean }) {
                         }}
                         disabled={loading}
                       >
-                        Annuler
+                        <span className="inline-flex items-center gap-1.5">
+                          <X className="h-3.5 w-3.5" aria-hidden="true" />
+                          Annuler
+                        </span>
                       </button>
                       <button
                         className="rounded-md bg-white px-2 py-1 text-xs font-medium text-black"
@@ -773,17 +915,17 @@ export default function ChatUI(props: { embed?: boolean }) {
                         Enregistrer & régénérer
                       </button>
                     </div>
-                  </div>
-                ) : (
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <MessageMarkdown content={m.content} />
-                    </div>
-                    <div className="shrink-0 flex items-center gap-1">
+                      </div>
+                    ) : (
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <MessageMarkdown content={m.content} />
+                        </div>
+                        <div className="ol-msg-actions shrink-0 flex items-center gap-1">
                       {m.role === "user" && m.id && selectedChatId ? (
                         <button
                           type="button"
-                          className="rounded-md bg-white/10 p-1 hover:bg-white/20"
+                          className="ol-chip rounded-md bg-white/10 p-1 hover:bg-white/20"
                           onClick={() => {
                             setEditingMessageId(m.id!);
                             setEditingText(m.content);
@@ -791,83 +933,116 @@ export default function ChatUI(props: { embed?: boolean }) {
                           title="Modifier la question"
                           disabled={loading}
                         >
-                          <PencilIcon className="h-4 w-4" />
+                          <Pencil className="h-4 w-4" aria-hidden="true" />
                         </button>
                       ) : null}
 
                       {m.role === "assistant" ? (
                         <button
                           type="button"
-                          className="rounded-md bg-black/5 p-1 hover:bg-black/10"
+                          className="ol-chip ol-icon-btn rounded-md ol-soft-bg p-1"
                           onClick={() => void copyToClipboard(m.content)}
                           title="Copier la réponse"
                         >
-                          <CopyIcon className="h-4 w-4" />
+                          <Copy className="h-4 w-4" aria-hidden="true" />
                         </button>
                       ) : null}
 
                       {m.role === "assistant" && m.id && selectedChatId ? (
                         <button
                           type="button"
-                          className="rounded-md bg-black/5 p-1 hover:bg-black/10"
+                          className="ol-chip ol-icon-btn rounded-md ol-soft-bg p-1"
                           onClick={() => void regenerateAnswerFromAssistant(m.id!)}
                           title="Régénérer la réponse"
                           disabled={loading}
                         >
-                          <RefreshIcon className="h-4 w-4" />
+                          <RefreshCcw className="h-4 w-4" aria-hidden="true" />
                         </button>
                       ) : null}
-                    </div>
+                        </div>
+                      </div>
+                    )}
+                      </div>
                   </div>
-                )}
+
+                    {m.role === "user" ? (
+                      <div className="ol-avatar ol-avatar--user mt-0.5">
+                        <User className="h-4 w-4" aria-hidden="true" />
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
               </div>
             ))}
             {loading ? (
-              <div className="self-start max-w-[85%] rounded-2xl bg-black/5 text-black px-4 py-2">
-                <div className="text-sm">Réponse en cours…</div>
+              <div className="ol-message ol-msg-row ol-msg-row--assistant" style={{ animationDelay: "0ms" }}>
+                <div className={props.embed ? "flex items-start gap-2" : "ol-chat-column"}>
+                  <div className="ol-msg-inner">
+                    <div className="ol-avatar ol-avatar--assistant mt-0.5">
+                      <Bot className="h-4 w-4" aria-hidden="true" />
+                    </div>
+                    <div className="ol-msg-content">
+                      <TypingIndicator />
+                    </div>
+                  </div>
+                </div>
               </div>
             ) : null}
           </div>
         </div>
 
-        <div className="rounded-xl border border-black/10 bg-white p-3">
-          <div className="flex gap-2">
-            <input
-              className="w-full rounded-lg border border-black/10 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-black/20"
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Ex: SPH -2.50 CYL -1.25 AX 180, beaucoup d’écrans, je veux blue cut + antireflet"
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void send();
-                }
-              }}
-            />
-            {loading ? (
-              <button
-                className="rounded-lg border border-black/10 bg-white px-4 py-2 text-sm font-medium"
-                onClick={() => stop()}
-                type="button"
-              >
-                Stop
-              </button>
-            ) : (
-              <button
-                className={
-                  canSend
-                    ? "rounded-lg bg-black px-4 py-2 text-sm font-medium text-white"
-                    : "rounded-lg bg-black/30 px-4 py-2 text-sm font-medium text-white"
-                }
-                onClick={() => void send()}
-                disabled={!canSend}
-                type="button"
-              >
-                Envoyer
-              </button>
-            )}
+        {props.embed ? null : (
+          <div className="ol-composer">
+            <div className="ol-composer-inner">
+              <div className="ol-composer-box p-2">
+                <div className="flex items-end gap-2">
+                  <textarea
+                    className="ol-scrollbar w-full resize-none rounded-2xl border-0 bg-transparent px-3 py-2 text-sm leading-6 outline-none"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    placeholder="Message OptiLens… (Shift+Enter pour une nouvelle ligne)"
+                    rows={2}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        void send();
+                      }
+                    }}
+                  />
+                  {loading ? (
+                    <button
+                      className="ol-chip ol-icon-btn inline-flex items-center gap-2 rounded-2xl border ol-border ol-surface-strong px-3 py-2 text-sm font-medium shadow-sm"
+                      onClick={() => stop()}
+                      type="button"
+                      title="Stop"
+                      aria-label="Stop"
+                    >
+                      <X className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  ) : (
+                    <button
+                      className={
+                        canSend
+                          ? "ol-chip ol-icon-btn ol-primary-btn inline-flex items-center gap-2 rounded-2xl px-3 py-2 text-sm font-medium shadow-sm"
+                          : "ol-disabled-btn inline-flex items-center gap-2 rounded-2xl px-3 py-2 text-sm font-medium"
+                      }
+                      onClick={() => void send()}
+                      disabled={!canSend}
+                      type="button"
+                      title="Envoyer"
+                      aria-label="Envoyer"
+                    >
+                      <Send className="h-4 w-4" aria-hidden="true" />
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="mt-2 text-center text-[11px] ol-text-faint">
+                OptiLens peut se tromper. Vérifie le prix/stock avant validation.
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
     </div>
