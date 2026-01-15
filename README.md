@@ -15,6 +15,12 @@ Important: pas d’API cloud. Le LLM tourne **en local** via Ollama.
 npm install
 ```
 
+Créer un fichier `.env` (optionnel) :
+
+```bash
+cp .env.example .env
+```
+
 ## Base de données (catalogue + prix + disponibilité)
 
 Par défaut: SQLite locale (fichier `prisma/dev.db`).
@@ -26,6 +32,10 @@ npm run db:seed
 
 Le schéma Prisma est dans prisma/schema.prisma.
 
+## Historique des chats (sessions + messages)
+
+Le chat est **persistant**: chaque conversation est sauvegardée en base (sessions + messages) et peut être reprise depuis l’UI (liste des chats, renommage, suppression).
+
 ## LLM local (Ollama)
 
 1) Démarrer Ollama
@@ -36,7 +46,7 @@ Le schéma Prisma est dans prisma/schema.prisma.
 ollama pull qwen2.5:7b-instruct
 ```
 
-1) (Optionnel) Variables d’environnement
+3) (Optionnel) Variables d’environnement
 
 - `OLLAMA_BASE_URL` (défaut `http://localhost:11434`)
 - `OLLAMA_MODEL` (défaut `qwen2.5:7b-instruct`)

@@ -101,3 +101,50 @@ model InventoryItem {
   @@index([lensId])
   @@index([isActive])
 }
+
+model ChatSession {
+  id           String        @id @default(cuid())
+  title        String
+  systemPrompt String?
+  summary      String?
+  language     String?
+
+  messages     ChatMessage[]
+
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([updatedAt])
+}
+
+model ChatMessage {
+  id        String      @id @default(cuid())
+  chatId    String
+  chat      ChatSession @relation(fields: [chatId], references: [id], onDelete: Cascade)
+
+  role      String
+  content   String
+
+  createdAt DateTime    @default(now())
+  updatedAt DateTime    @updatedAt
+
+  @@index([chatId])
+  @@index([createdAt])
+}
+
+model ChatMemory {
+  id        String   @id @default(cuid())
+
+  // No auth in this app yet, so we store memory in scopes:
+  // - "global" for cross-chat memory
+  // - "chat:<chatId>" for chat-specific memory
+  scope     String   @default("global")
+  key       String
+  value     String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([scope, key])
+  @@index([scope])
+}

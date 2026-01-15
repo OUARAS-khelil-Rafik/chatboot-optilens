@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { detectLanguage, type SupportedLanguage } from "@/lib/language";
+import { detectLanguageInfo, type SupportedLanguage } from "@/lib/language";
 import { ollamaChat, ollamaChatStream, type OllamaMessage } from "@/lib/ollama";
 import { parsePrescription, recommendFromInputs } from "@/lib/recommendation";
 import { formatCatalogContextForPrompt, searchCatalog } from "@/lib/catalogSearch";
@@ -14,9 +14,78 @@ const MessageSchema = z.object({
 });
 
 const ChatRequestSchema = z.object({
+  chatId: z.string().min(1).optional(),
+  userMessageId: z.string().min(1).optional(),
   messages: z.array(MessageSchema).min(1),
   stream: z.boolean().optional(),
+  clientRequestId: z.string().optional(),
 });
+
+function safeRole(role: string): "user" | "assistant" | "system" {
+  if (role === "user" || role === "assistant" || role === "system") return role;
+  return "user";
+}
+
+function compactTitleFromUserText(text: string): string {
+  const cleaned = text
+    .replace(/\s+/g, " ")
+    .replace(/[\r\n]+/g, " ")
+    .trim();
+  if (!cleaned) return "Nouveau chat";
+  const words = cleaned.split(" ").slice(0, 7).join(" ");
+  return words.length > 80 ? `${words.slice(0, 77)}...` : words;
+}
+
+function appendToSummary(prev: string | null | undefined, user: string, assistant: string): string {
+  const clip = (s: string) => s.replace(/\s+/g, " ").trim().slice(0, 280);
+  const next = [
+    prev?.trim() ? prev.trim() : "",
+    `U: ${clip(user)}`,
+    `A: ${clip(assistant)}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
+  // Keep the summary bounded.
+  return next.length > 2000 ? next.slice(next.length - 2000) : next;
+}
+
+function buildSummaryFromMessages(pairs: Array<{ role: "user" | "assistant"; content: string }>): string {
+  let summary = "";
+  for (let i = 0; i < pairs.length; i += 2) {
+    const u = pairs[i];
+    const a = pairs[i + 1];
+    if (!u || u.role !== "user" || !a || a.role !== "assistant") continue;
+    summary = appendToSummary(summary, u.content, a.content);
+  }
+  return summary.trim() ? summary : "";
+}
+
+async function upsertMemory(params: {
+  scope: string;
+  key: string;
+  value: string;
+}) {
+  await prisma.chatMemory.upsert({
+    where: { scope_key: { scope: params.scope, key: params.key } },
+    create: { scope: params.scope, key: params.key, value: params.value },
+    update: { value: params.value },
+    select: { id: true },
+  });
+}
+
+async function getMemoryText(params: { chatId: string }): Promise<string> {
+  const items = await prisma.chatMemory.findMany({
+    where: { scope: { in: ["global", `chat:${params.chatId}`] } },
+    orderBy: { updatedAt: "desc" },
+    select: { scope: true, key: true, value: true },
+    take: 25,
+  });
+
+  if (items.length === 0) return "(none)";
+  return items
+    .map((m) => `- [${m.scope}] ${m.key}: ${m.value}`)
+    .join("\n");
+}
 
 function getCommercialIntent(text: string): { price: boolean; availability: boolean } {
   // FR/EN/AR signals.
@@ -45,12 +114,12 @@ function makeSystemPrompt(lang: SupportedLanguage, ctx: {
   // We inject only compact catalog lines + our rules.
   const languageInstruction =
     lang === "ar"
-      ? "أجب بالعربية."
+      ? "LANGUAGE RULE (highest priority): أجب بالعربية فقط، وبنفس أسلوب المستخدم. لا تُجب بالإنجليزية أو الفرنسية."
       : lang === "dz"
-        ? "جاوب بالدارجة الجزائرية (Latin ولا عربية حسب سؤال الزبون)."
+        ? "LANGUAGE RULE (highest priority): جاوب بالدارجة الجزائرية (Latin ولا عربية حسب سؤال الزبون). ما تبدلش للإنجليزية/الفرنسية إلا إذا طلبها."
         : lang === "en"
-          ? "Answer in English."
-          : "Réponds en français.";
+          ? "LANGUAGE RULE (highest priority): Answer in English only. Do not answer in French or Arabic."
+          : "LANGUAGE RULE (priorité absolue): Réponds en français uniquement. Ne réponds pas en anglais ou en arabe.";
 
   return [
     "You are OptiLens, a multilingual optical-lens sales assistant for an optician.",
@@ -91,9 +160,52 @@ export async function POST(req: Request) {
     const body = ChatRequestSchema.parse(json);
 
     const lastUser = [...body.messages].reverse().find((m) => m.role === "user");
-    const userText = lastUser?.content ?? "";
+    const fallbackUserText = lastUser?.content ?? "";
 
-    const lang = detectLanguage(userText);
+    // Ensure we have a chat session.
+    let chatId = body.chatId;
+    let existingUserMessageId: string | undefined;
+    let userText = fallbackUserText;
+
+    if (body.userMessageId) {
+      if (!chatId) {
+        return NextResponse.json(
+          { error: "chatId est requis quand userMessageId est fourni." },
+          { status: 400 },
+        );
+      }
+
+      const existing = await prisma.chatMessage.findUnique({
+        where: { id: body.userMessageId },
+        select: { id: true, chatId: true, role: true, content: true },
+      });
+
+      if (!existing || existing.chatId !== chatId || existing.role !== "user") {
+        return NextResponse.json(
+          { error: "Message user introuvable pour ce chat." },
+          { status: 404 },
+        );
+      }
+
+      existingUserMessageId = existing.id;
+      userText = existing.content;
+    }
+
+    // Prefer the chat's stored language when detection is ambiguous.
+    const detection = detectLanguageInfo(userText);
+    let storedLang: SupportedLanguage | null = null;
+    if (body.chatId) {
+      const existingSession = await prisma.chatSession.findUnique({
+        where: { id: body.chatId },
+        select: { language: true },
+      });
+      storedLang = (existingSession?.language as SupportedLanguage | null) ?? null;
+    }
+
+    const lang: SupportedLanguage =
+      detection.confidence === "low" && storedLang
+        ? storedLang
+        : detection.lang;
 
     // Parse prescription from last user message (simple, can be expanded).
     const prescription = parsePrescription(userText);
@@ -127,6 +239,44 @@ export async function POST(req: Request) {
           : "(Aucune donnée prix active dans la DB)";
     }
 
+    // Ensure we have a chat session.
+    if (!chatId) {
+      const created = await prisma.chatSession.create({
+        data: {
+          title: compactTitleFromUserText(userText),
+          language: lang,
+        },
+        select: { id: true },
+      });
+      chatId = created.id;
+    }
+
+    const chatScope = `chat:${chatId}`;
+
+    // Persist the user's message (unless regenerating an existing stored message).
+    let userMessageId = existingUserMessageId;
+    if (!userMessageId) {
+      const createdUser = await prisma.chatMessage.create({
+        data: {
+          chatId,
+          role: "user",
+          content: userText,
+        },
+        select: { id: true },
+      });
+      userMessageId = createdUser.id;
+    }
+
+    // Update lightweight memory from deterministic signals.
+    await upsertMemory({ scope: "global", key: "lastLanguage", value: lang });
+    if (prescription) {
+      await upsertMemory({
+        scope: chatScope,
+        key: "prescription",
+        value: JSON.stringify(prescription),
+      });
+    }
+
     const system = makeSystemPrompt(lang, {
       catalogContext,
       recommendation,
@@ -136,22 +286,85 @@ export async function POST(req: Request) {
       includeAvailability,
     });
 
-    // Hard limit chat history to reduce context.
-    const trimmedHistory = body.messages
-      .filter((m) => m.role !== "system")
-      .slice(-8)
-      .map((m) => ({ role: m.role, content: m.content }) satisfies OllamaMessage);
+    // Load last messages from DB for continuity.
+    const recent = await prisma.chatMessage.findMany({
+      where: { chatId },
+      orderBy: { createdAt: "asc" },
+      select: { role: true, content: true },
+      take: 14,
+    });
 
-    const llmMessages: OllamaMessage[] = [{ role: "system", content: system }, ...trimmedHistory];
+    const memoryText = await getMemoryText({ chatId });
+
+    const systemWithMemory = [
+      system,
+      "",
+      "MEMORY (facts/preferences; do not invent):",
+      memoryText,
+      "",
+      "Use the chat history below to stay consistent with the previous conversation.",
+    ].join("\n");
+
+    const history: OllamaMessage[] = recent
+      .filter((m) => m.role !== "system")
+      .map((m) => ({ role: safeRole(m.role), content: m.content }) satisfies OllamaMessage)
+      .slice(-12);
+
+    const llmMessages: OllamaMessage[] = [{ role: "system", content: systemWithMemory }, ...history];
 
     if (body.stream) {
       const stream = new ReadableStream<Uint8Array>({
         async start(controller) {
           const encoder = new TextEncoder();
+          let full = "";
           try {
             for await (const chunk of ollamaChatStream({ messages: llmMessages, temperature: 0.2 })) {
+              full += chunk;
               controller.enqueue(encoder.encode(chunk));
             }
+
+            // Persist assistant answer after streaming completes.
+            await prisma.chatMessage.create({
+              data: {
+                chatId,
+                role: "assistant",
+                content: full,
+              },
+              select: { id: true },
+            });
+
+            // Update summary and chat metadata.
+            const chat = await prisma.chatSession.findUnique({
+              where: { id: chatId },
+              select: { title: true, summary: true },
+            });
+
+            // Rebuild summary from recent messages (more consistent when regenerating).
+            const lastForSummary = await prisma.chatMessage.findMany({
+              where: { chatId },
+              orderBy: { createdAt: "asc" },
+              select: { role: true, content: true },
+              take: 20,
+            });
+            const summaryPairs = lastForSummary
+              .filter((m) => m.role === "user" || m.role === "assistant")
+              .map((m) => ({ role: safeRole(m.role) as "user" | "assistant", content: m.content }));
+
+            const rebuiltSummary = buildSummaryFromMessages(summaryPairs);
+
+            await prisma.chatSession.update({
+              where: { id: chatId },
+              data: {
+                language: lang,
+                summary: rebuiltSummary || chat?.summary || null,
+                title:
+                  chat?.title === "Nouveau chat" || !chat?.title
+                    ? compactTitleFromUserText(userText)
+                    : undefined,
+              },
+              select: { id: true },
+            });
+
             controller.close();
           } catch (err) {
             controller.error(err);
@@ -165,13 +378,54 @@ export async function POST(req: Request) {
           "Content-Type": "text/plain; charset=utf-8",
           "Cache-Control": "no-cache, no-transform",
           "X-Accel-Buffering": "no",
+          "X-Chat-Id": chatId,
+          "X-User-Message-Id": userMessageId,
         },
       });
     }
 
     const answer = await ollamaChat({ messages: llmMessages, temperature: 0.2 });
 
-    return NextResponse.json({ language: lang, answer, catalogHits: hits, recommendation });
+    await prisma.chatMessage.create({
+      data: {
+        chatId,
+        role: "assistant",
+        content: answer,
+      },
+      select: { id: true },
+    });
+
+    const chat = await prisma.chatSession.findUnique({
+      where: { id: chatId },
+      select: { title: true, summary: true },
+    });
+
+    const lastForSummary = await prisma.chatMessage.findMany({
+      where: { chatId },
+      orderBy: { createdAt: "asc" },
+      select: { role: true, content: true },
+      take: 20,
+    });
+    const summaryPairs = lastForSummary
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({ role: safeRole(m.role) as "user" | "assistant", content: m.content }));
+
+    const rebuiltSummary = buildSummaryFromMessages(summaryPairs);
+
+    await prisma.chatSession.update({
+      where: { id: chatId },
+      data: {
+        language: lang,
+        summary: rebuiltSummary || chat?.summary || null,
+        title:
+          chat?.title === "Nouveau chat" || !chat?.title
+            ? compactTitleFromUserText(userText)
+            : undefined,
+      },
+      select: { id: true },
+    });
+
+    return NextResponse.json({ chatId, userMessageId, language: lang, answer, catalogHits: hits, recommendation });
   } catch (e) {
     console.error("[api/chat] error", e);
     const msg = e instanceof Error ? e.message : "Unknown error";
