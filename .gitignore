@@ -31,7 +31,11 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
-.env*
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
 # vercel
 .vercel
@@ -49,10 +53,6 @@ next-env.d.ts
 /prisma/*.db
 /prisma/*.db-journal
 /prisma/prisma/
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
 /.turbo
 /.idea
 .vscode/*
