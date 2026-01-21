@@ -52,7 +52,7 @@ npm install
 Ce projet supporte `.env.local` et `.env`.
 
 ```bash
-cp .env.example .env.local
+cp .env.example .env
 ```
 
 ### Initialiser la base
